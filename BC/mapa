@@ -1,0 +1,247 @@
+"""
+CSP para colorear mapa de Baja California con colores específicos
+"""
+
+from collections import deque
+import time
+import cv2
+import numpy as np
+import os
+
+VARIABLES = ["Tijuana", "Rosarito", "Tecate", "Ensenada",
+             "Mexicali", "San_Felipe", "San_Quintin"]
+
+CONSTRAINTS = [
+    ("Ensenada", "Mexicali"),
+    ("Ensenada", "Tecate"),
+    ("Ensenada", "Tijuana"),
+    ("Ensenada", "Rosarito"),
+    ("Ensenada", "San_Quintin"),
+    ("Ensenada", "San_Felipe"),
+    ("Mexicali", "Ensenada"),
+    ("Mexicali", "Tecate"),
+    ("Mexicali", "San_Felipe"),
+    ("Tecate", "Ensenada"),
+    ("Tecate", "Mexicali"),
+    ("Tecate", "Tijuana"),
+    ("Tijuana", "Ensenada"),
+    ("Tijuana", "Tecate"),
+    ("Tijuana", "Rosarito"),
+    ("Rosarito", "Ensenada"),
+    ("Rosarito", "Tijuana"),
+    ("San_Quintin", "Ensenada"),
+    ("San_Quintin", "San_Felipe"),
+    ("San_Felipe", "Ensenada"),
+    ("San_Felipe", "Mexicali"),
+    ("San_Felipe", "San_Quintin"),
+]
+
+# Asignación fija de colores según la imagen
+FIXED_COLORS = {
+    "San_Quintin": "Cafe",
+    "San_Felipe": "Verde",
+    "Mexicali": "Rojo",
+    "Ensenada": "Amarillo",
+    "Tecate": "Azul_Claro",
+    "Tijuana": "Azul_Oscuro",
+    "Rosarito": "Naranja"
+}
+
+COLORS = ["Cafe", "Verde", "Rojo", "Amarillo", "Azul_Claro", "Azul_Oscuro", "Naranja"]
+
+stats = {'steps': 0, 'backtracks': 0, 'assignments': 0}
+
+def build_neighbors():
+    neighbors = {var: [] for var in VARIABLES}
+    for (x, y) in CONSTRAINTS:
+        if y not in neighbors[x]:
+            neighbors[x].append(y)
+        if x not in neighbors[y]:
+            neighbors[y].append(x)
+    return neighbors
+
+NEIGHBORS = build_neighbors()
+
+def initialize_domains():
+    # Cada variable tiene solo su color asignado
+    return {var: [FIXED_COLORS[var]] for var in VARIABLES}
+
+def consistent(assignment):
+    for (x, y) in CONSTRAINTS:
+        if x in assignment and y in assignment and assignment[x] == assignment[y]:
+            return False
+    return True
+
+def verify_fixed_solution():
+    """Verifica que la asignación fija cumpla todas las restricciones"""
+    for (x, y) in CONSTRAINTS:
+        if FIXED_COLORS[x] == FIXED_COLORS[y]:
+            return False
+    return True
+
+def visualize_solution(solution, image_path):
+    """Colorea el mapa con los colores exactos de la imagen"""
+    try:
+        img = cv2.imread(image_path)
+        if img is None:
+            print(f"❌ Error: No se pudo leer la imagen")
+            return
+
+        height, width = img.shape[:2]
+        print(f"\n📐 Imagen: {width}x{height} píxeles")
+
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        _, borders = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
+        borders = 255 - borders
+        border_mask = borders > 100
+
+        output_img = np.ones((height, width, 3), dtype=np.uint8) * 255
+
+        # Colores BGR exactos según la imagen
+        color_map = {
+            "Cafe": (101, 132, 165),         # Café/marrón
+            "Verde": (34, 180, 76),          # Verde
+            "Rojo": (52, 52, 227),           # Rojo
+            "Amarillo": (0, 255, 255),       # Amarillo
+            "Azul_Claro": (255, 200, 100),   # Azul claro/celeste
+            "Azul_Oscuro": (180, 30, 30),    # Azul oscuro
+            "Naranja": (0, 140, 255)         # Naranja
+        }
+
+        seed_points = {
+            "Rosarito": [
+                (int(width * 0.095), int(height * 0.10)),
+                (int(width * 0.10), int(height * 0.095)),
+            ],
+            "Tijuana": [
+                (int(width * 0.145), int(height * 0.08)),
+                (int(width * 0.15), int(height * 0.085)),
+            ],
+            "Tecate": [
+                (int(width * 0.205), int(height * 0.10)),
+                (int(width * 0.21), int(height * 0.095)),
+                (int(width * 0.20), int(height * 0.105)),
+            ],
+            "Ensenada": [
+                (int(width * 0.18), int(height * 0.26)),
+                (int(width * 0.19), int(height * 0.28)),
+                (int(width * 0.17), int(height * 0.30)),
+                (int(width * 0.16), int(height * 0.35)),
+            ],
+            "Mexicali": [
+                (int(width * 0.36), int(height * 0.13)),
+                (int(width * 0.37), int(height * 0.14)),
+                (int(width * 0.38), int(height * 0.12)),
+            ],
+            "San_Felipe": [
+                (int(width * 0.40), int(height * 0.36)),
+                (int(width * 0.42), int(height * 0.34)),
+                (int(width * 0.41), int(height * 0.38)),
+            ],
+            "San_Quintin": [
+                (int(width * 0.31), int(height * 0.49)),
+                (int(width * 0.32), int(height * 0.51)),
+                (int(width * 0.30), int(height * 0.52)),
+            ]
+        }
+
+        print(f"\n🎨 Coloreando municipios:")
+
+        for region, color_name in solution.items():
+            if region in seed_points:
+                color = color_map.get(color_name, (128, 128, 128))
+                points_colored = 0
+
+                print(f"  {region:20} → {color_name:15}", end=" ")
+
+                for x, y in seed_points[region]:
+                    if 0 <= x < width and 0 <= y < height:
+                        if borders[y, x] < 50:
+                            mask = np.zeros((height + 2, width + 2), np.uint8)
+                            try:
+                                cv2.floodFill(
+                                    output_img,
+                                    mask,
+                                    (x, y),
+                                    color,
+                                    loDiff=(5, 5, 5),
+                                    upDiff=(5, 5, 5),
+                                    flags=cv2.FLOODFILL_FIXED_RANGE
+                                )
+                                points_colored += 1
+                            except Exception as e:
+                                pass
+
+                print(f"({points_colored} puntos)")
+
+        output_img[border_mask] = [0, 0, 0]
+
+        output_path = os.path.splitext(image_path)[0] + "_coloreado.png"
+        cv2.imwrite(output_path, output_img)
+        print(f"\n✅ Imagen guardada: {output_path}")
+        print(f"   ¡Mapa coloreado con los colores exactos de la imagen!")
+
+    except Exception as e:
+        print(f"❌ Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+
+def solve_csp(image_path=None):
+    global stats
+    stats = {'steps': 0, 'backtracks': 0, 'assignments': 0}
+
+    print("=" * 60)
+    print("🎯 COLOREANDO MAPA DE BAJA CALIFORNIA")
+    print("=" * 60)
+
+    print("\n1️⃣  Verificando asignación de colores...")
+
+    if verify_fixed_solution():
+        print("   ✅ La asignación de colores es válida")
+        solution = FIXED_COLORS
+    else:
+        print("   ❌ ERROR: La asignación de colores viola las restricciones")
+        return None
+
+    print("\n" + "=" * 60)
+    print("✅ COLORES ASIGNADOS")
+    print("=" * 60)
+    print("\n📋 Asignación de colores:")
+    for city in VARIABLES:
+        print(f"   {city:20} → {solution[city]}")
+
+    if consistent(solution):
+        print("\n   ✅ Solución válida (ningún vecino tiene el mismo color)")
+
+    if image_path:
+        print("\n2️⃣  Generando mapa coloreado...")
+        visualize_solution(solution, image_path)
+
+    return solution
+
+if __name__ == "__main__":
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    IMAGE_PATH = os.path.join(script_dir, "BC.png")
+
+    if not os.path.exists(IMAGE_PATH):
+        possible_paths = [
+            "BC.png",
+            "assets/BC.png",
+            os.path.join(script_dir, "..", "BC.png"),
+        ]
+        for path in possible_paths:
+            if os.path.exists(path):
+                IMAGE_PATH = path
+                break
+
+    if not os.path.exists(IMAGE_PATH):
+        print("❌ ERROR: No se encontró BC.png")
+        print(f"   Búsqueda en: {script_dir}")
+        exit(1)
+
+    print(f"✅ Imagen encontrada: {IMAGE_PATH}\n")
+
+    solution = solve_csp(image_path=IMAGE_PATH)
+
+    if not solution:
+        print("\n❌ No se pudo aplicar la coloración")
